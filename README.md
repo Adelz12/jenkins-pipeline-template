@@ -439,7 +439,3 @@ docker container ls
 ```
 
 ---
-
-## License
-
-This project is intended for educational and DevOps learning purposes.
