@@ -1,6 +1,16 @@
 # CI/CD Pipeline with Jenkins and Docker Compose
 
-This project demonstrates how to automate application deployment using **Jenkins Declarative Pipeline** and **Docker Compose** on a remote Linux server.
+## Overview
+
+This project demonstrates a complete CI/CD workflow using Jenkins and Docker Compose.
+
+The pipeline automatically:
+
+1. Pulls source code from GitHub.
+2. Packages the application.
+3. Transfers files to a remote Linux server.
+4. Deploys the application using Docker Compose.
+5. Verifies that containers are running successfully.
 
 ---
 
@@ -12,18 +22,32 @@ GitHub Repository
         ▼
      Jenkins
         │
-        ├── Build
-        ├── Package (tar.gz)
-        ├── Transfer (scp)
+        ├── Checkout Source Code
+        ├── Package Application
+        ├── Transfer Files (SCP)
         ▼
    Remote Server
         │
         ▼
  Docker Compose
         │
-        ├── Application
-        ├── Database
-        └── Other Services
+        ├── Application Container
+        ├── Database Container
+        └── Supporting Services
+```
+
+---
+
+## Project Structure
+
+```text
+.
+├── Jenkinsfile
+├── docker-compose.yml
+├── Dockerfile
+├── app/
+├── requirements.txt
+└── README.md
 ```
 
 ---
@@ -32,18 +56,31 @@ GitHub Repository
 
 ### Jenkins Server
 
-* Jenkins installed and running
-* Git installed
-* SSH access to the target server
-* Required Jenkins plugins:
+Install:
 
-  * Git Plugin
-  * Credentials Plugin
-  * SSH Agent Plugin
+* Jenkins
+* Git
+* OpenSSH Client
+
+Required Jenkins Plugins:
+
+* Git Plugin
+* Credentials Plugin
+* SSH Agent Plugin
+* Pipeline Plugin
+
+Verify installation:
+
+```bash
+jenkins --version
+git --version
+```
+
+---
 
 ### Target Server
 
-Verify Docker and Docker Compose are installed:
+Verify Docker installation:
 
 ```bash
 docker --version
@@ -56,49 +93,95 @@ Add the deployment user to the Docker group:
 sudo usermod -aG docker $USER
 ```
 
-Log out and log back in for the changes to take effect.
+Log out and log back in after running the command.
 
 ---
 
-## Jenkins Credentials Configuration
-
-Store sensitive information securely in Jenkins.
+## Jenkins Credentials Setup
 
 Navigate to:
 
 ```text
 Manage Jenkins
 └── Credentials
-    └── Global
 ```
 
-Add one of the following credential types:
+Add a new credential:
 
-### Option 1: SSH Private Key (Recommended)
+### Recommended Method
 
-* Kind: SSH Username with private key
-* ID: server-ssh-key
+```text
+Kind:
+SSH Username with private key
+```
 
-### Option 2: Username and Password
+Example:
 
-* Kind: Username with password
+```text
+ID: server-ssh-key
+Username: deploy
+Private Key: <your-private-key>
+```
 
-SSH keys are recommended because they are more secure and easier to automate.
+The credential ID will be referenced inside the Jenkinsfile.
 
 ---
 
-## Jenkinsfile
+## Jenkins Job Configuration
 
-Create a file named `Jenkinsfile` in the root of your repository.
+Create a new Jenkins Pipeline Job:
+
+```text
+Dashboard
+└── New Item
+    └── Pipeline
+```
+
+Configuration:
+
+```text
+Pipeline Definition:
+Pipeline script from SCM
+```
+
+SCM:
+
+```text
+Git
+```
+
+Repository URL:
+
+```text
+https://github.com/your-username/your-project.git
+```
+
+Branch:
+
+```text
+main
+```
+
+Script Path:
+
+```text
+Jenkinsfile
+```
+
+Save the job.
+
+---
+
+## Jenkinsfile Example
 
 ```groovy
 pipeline {
     agent any
 
     environment {
-        SERVER_USER = "your-user"
-        SERVER_IP   = "your-server-ip"
-        TARGET_DIR  = "/home/your-user/app"
+        SERVER_USER = "deploy"
+        SERVER_IP   = "192.168.1.100"
+        TARGET_DIR  = "/home/deploy/application"
     }
 
     stages {
@@ -106,11 +189,11 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/your-username/your-repository.git'
+                url: 'https://github.com/your-username/project.git'
             }
         }
 
-        stage('Package Application') {
+        stage('Package') {
             steps {
                 sh '''
                     tar -czf project.tar.gz --exclude=.git .
@@ -120,6 +203,7 @@ pipeline {
 
         stage('Deploy') {
             steps {
+
                 sshagent(credentials: ['server-ssh-key']) {
 
                     sh '''
@@ -146,6 +230,7 @@ pipeline {
     }
 
     post {
+
         success {
             echo 'Deployment completed successfully.'
         }
@@ -165,18 +250,16 @@ pipeline {
 
 ## Docker Compose Example
 
-Example `docker-compose.yml`:
-
 ```yaml
 services:
-  web:
+  app:
     build: .
     ports:
-      - "8000:8000"
+      - "9999:8000"
     restart: unless-stopped
 ```
 
-Start services manually:
+Start services:
 
 ```bash
 docker compose up -d
@@ -198,55 +281,41 @@ docker ps
 
 ## Deployment Workflow
 
-1. Developer pushes code to GitHub.
-2. Jenkins pulls the latest source code.
-3. Jenkins packages the application.
-4. Jenkins transfers files to the target server.
-5. Docker Compose rebuilds and starts containers.
-6. Application becomes available on the configured port.
+### Manual Deployment
+
+From Jenkins:
+
+```text
+Dashboard
+└── Pipeline Job
+    └── Build Now
+```
 
 ---
 
-## Troubleshooting
+### Automatic Deployment
 
-### SSH Connection Failed
+Configure a GitHub Webhook:
 
-Verify:
-
-```bash
-ssh user@server-ip
+```text
+GitHub Repository
+└── Settings
+    └── Webhooks
 ```
 
-Check:
+Webhook URL:
 
-* Server IP address
-* SSH service status
-* Firewall rules
-* Jenkins credentials
+```text
+http://your-jenkins-server:8080/github-webhook/
+```
+
+Each push to the repository automatically triggers the pipeline.
 
 ---
 
-### Docker Permission Denied
+## Verification
 
-Verify the deployment user belongs to the Docker group:
-
-```bash
-groups
-```
-
-If Docker is missing:
-
-```bash
-sudo usermod -aG docker $USER
-```
-
-Then log in again.
-
----
-
-### Container Starts but Application Is Not Reachable
-
-Check container status:
+Verify deployed containers:
 
 ```bash
 docker ps
@@ -255,21 +324,80 @@ docker ps
 Check logs:
 
 ```bash
-docker logs <container_id>
+docker compose logs
+```
+
+Check a specific service:
+
+```bash
+docker compose logs app
+```
+
+---
+
+## Troubleshooting
+
+### SSH Authentication Failed
+
+Test manually:
+
+```bash
+ssh deploy@server-ip
+```
+
+Verify:
+
+* SSH service is running.
+* Correct username is used.
+* Correct private key is configured.
+* Jenkins credential ID is correct.
+
+---
+
+### Docker Permission Denied
+
+Verify user groups:
+
+```bash
+groups
+```
+
+Expected output should include:
+
+```text
+docker
+```
+
+If not:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Log in again afterward.
+
+---
+
+### Application Not Reachable
+
+Check containers:
+
+```bash
+docker ps
 ```
 
 Verify:
 
 * Port mappings
-* Firewall rules
+* Firewall configuration
 * Application listening address
 * Docker Compose configuration
 
 ---
 
-### Deployment Fails During Build
+### Build Failed
 
-Inspect Jenkins console output:
+Review:
 
 ```text
 Jenkins Dashboard
@@ -279,9 +407,9 @@ Jenkins Dashboard
 
 Look for:
 
-* Git authentication errors
-* SSH authentication failures
-* Docker build errors
+* Git errors
+* SSH errors
+* Docker build failures
 * Missing environment variables
 
 ---
@@ -289,10 +417,11 @@ Look for:
 ## Security Recommendations
 
 * Use SSH keys instead of passwords.
-* Avoid hardcoding secrets in source code.
-* Store credentials in Jenkins Credentials Manager.
-* Limit SSH access to trusted users.
-* Regularly update Docker and Jenkins.
+* Never hardcode credentials.
+* Store secrets in Jenkins Credentials Manager.
+* Restrict SSH access to authorized users.
+* Keep Jenkins and Docker updated.
+* Enable regular backups for Jenkins.
 
 ---
 
@@ -302,12 +431,15 @@ Look for:
 docker ps
 docker compose up -d
 docker compose down
-docker compose logs
 docker compose restart
+docker compose logs
+docker compose logs -f
+docker image ls
+docker container ls
 ```
 
 ---
 
 ## License
 
-This project is provided for educational and DevOps learning purposes.
+This project is intended for educational and DevOps learning purposes.
