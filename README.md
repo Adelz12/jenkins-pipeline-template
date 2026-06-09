@@ -1,142 +1,313 @@
-Markdown
-# Comprehensive Guide to CI/CD Pipelines Using Jenkins & Docker Compose
+# CI/CD Pipeline with Jenkins and Docker Compose
 
-This guide provides a generic, step-by-step framework to configure, secure, and deploy applications using a **Jenkins Declarative Pipeline** combined with **Docker Compose** on a remote target environment.
-
----
-
-## 📌 Architectural Overview
-
-A standard deployment pipeline automates infrastructure delivery through a clear separation of concerns:
-
-1. **Automation Server (Jenkins):** Pulls raw source code, handles authentication credentials safely, bundles architecture assets, and orchestrates terminal tasks.
-2. **Target Server (Host):** Receives production artifacts, manages persistent application states, and orchestrates active runtime containers via Docker Engine.
+This project demonstrates how to automate application deployment using **Jenkins Declarative Pipeline** and **Docker Compose** on a remote Linux server.
 
 ---
 
-## 🛠 Step 1: Preparing Your Target Server
+## Architecture
 
-Before executing any deployment script, the target remote machine must have a stable foundational environment.
+```text
+GitHub Repository
+        │
+        ▼
+     Jenkins
+        │
+        ├── Build
+        ├── Package (tar.gz)
+        ├── Transfer (scp)
+        ▼
+   Remote Server
+        │
+        ▼
+ Docker Compose
+        │
+        ├── Application
+        ├── Database
+        └── Other Services
+```
 
-### 1. Engine Installation
-Ensure both **Docker** and the **Docker Compose V2** plugin are active on the host machine:
+---
+
+## Prerequisites
+
+### Jenkins Server
+
+* Jenkins installed and running
+* Git installed
+* SSH access to the target server
+* Required Jenkins plugins:
+
+  * Git Plugin
+  * Credentials Plugin
+  * SSH Agent Plugin
+
+### Target Server
+
+Verify Docker and Docker Compose are installed:
+
 ```bash
 docker --version
 docker compose version
-2. User Permission Delegation
-To prevent the automation process from hanging due to nested privilege prompts (sudo), grant your deployment user explicit access to the Docker daemon socket:
+```
 
-Bash
+Add the deployment user to the Docker group:
+
+```bash
 sudo usermod -aG docker $USER
-Important: The deployment user must log out and log back in for these group configuration updates to take effect.
+```
 
-🔐 Step 2: Configuring Jenkins Credentials
-Hardcoding passwords or sensitive private SSH keys directly inside source-controlled configuration code is a critical security risk. Jenkins manages this securely via its credential store.
+Log out and log back in for the changes to take effect.
 
-Navigate to the Jenkins Dashboard and go to Manage Jenkins -> Credentials.
+---
 
-Select your global domain and click Add Credentials.
+## Jenkins Credentials Configuration
 
-Kind Selection:
+Store sensitive information securely in Jenkins.
 
-For Password Authentication: Select Secret text (or Username with password). Provide a distinct descriptive reference alias, such as server-password.
+Navigate to:
 
-For Key Authentication: Select SSH Username with private key. Paste the raw unencrypted SSH private key contents here.
+```text
+Manage Jenkins
+└── Credentials
+    └── Global
+```
 
-🚀 Step 3: The Generic Jenkinsfile Blueprint
-Create a file named Jenkinsfile at the root directory of your application repository. This blueprint uses standard Unix archiving (tar) and secure remote copying (scp) to optimize build performance and guarantee environment compatibility.
+Add one of the following credential types:
 
-Groovy
+### Option 1: SSH Private Key (Recommended)
+
+* Kind: SSH Username with private key
+* ID: server-ssh-key
+
+### Option 2: Username and Password
+
+* Kind: Username with password
+
+SSH keys are recommended because they are more secure and easier to automate.
+
+---
+
+## Jenkinsfile
+
+Create a file named `Jenkinsfile` in the root of your repository.
+
+```groovy
 pipeline {
     agent any
 
     environment {
-        // Define your environment coordinates here
-        SERVER_USER = 'your-ssh-username'
-        SERVER_IP   = 'your-target-server-ip'
-        TARGET_DIR  = '/home/your-ssh-username/your-project-directory'
+        SERVER_USER = "your-user"
+        SERVER_IP   = "your-server-ip"
+        TARGET_DIR  = "/home/your-user/app"
     }
 
     stages {
-        stage('Fetch Source Code') {
+
+        stage('Checkout') {
             steps {
-                echo 'Pulling target repository assets from version control...'
-                // Adjust branch names and repository URLs to fit your deployment target
-                git branch: 'main', url: '[https://github.com/your-username/your-repo.git](https://github.com/your-username/your-repo.git)'
+                git branch: 'main',
+                    url: 'https://github.com/your-username/your-repository.git'
             }
         }
 
-        stage('Build & Deploy to Server') {
+        stage('Package Application') {
             steps {
-                echo 'Packaging artifacts and executing secure remote transfer...'
-                
-                // Binding the secure Jenkins credential ID to an environmental variable
-                withCredentials([string(credentialsId: 'server-password', variable: 'PASSWORD')]) {
-                    sh """
-                        # 1. Inject password automation configuration for headless SSH jobs
-                        export SSH_ASKPASS_REQUIRE=force
-                        echo '#!/bin/sh' > askpass.sh
-                        echo 'echo "\$PASSWORD"' >> askpass.sh
-                        chmod +x askpass.sh
-                        export DISPLAY=:0
-                        export SSH_ASKPASS="./askpass.sh"
+                sh '''
+                    tar -czf project.tar.gz --exclude=.git .
+                '''
+            }
+        }
 
-                        # 2. Package current workspace (excluding source control metadata)
-                        tar -czf project.tar.gz --exclude='.git' ./*
+        stage('Deploy') {
+            steps {
+                sshagent(credentials: ['server-ssh-key']) {
 
-                        # 3. Initialize remote workspace filesystem path
-                        setsid ssh -o StrictHostKeyChecking=no \${SERVER_USER}@\${SERVER_IP} "mkdir -p \${TARGET_DIR}"
-                        
-                        # 4. Stream compressed workspace package directly to host engine path
-                        setsid scp -o StrictHostKeyChecking=no project.tar.gz \${SERVER_USER}@\${SERVER_IP}:\${TARGET_DIR}/
-                        
-                        # 5. Extract payload contents on remote machine and trigger container execution
-                        setsid ssh -o StrictHostKeyChecking=no \${SERVER_USER}@\${SERVER_IP} "
-                            cd \${TARGET_DIR}
+                    sh '''
+                        ssh ${SERVER_USER}@${SERVER_IP} \
+                        "mkdir -p ${TARGET_DIR}"
+
+                        scp project.tar.gz \
+                        ${SERVER_USER}@${SERVER_IP}:${TARGET_DIR}/
+
+                        ssh ${SERVER_USER}@${SERVER_IP} "
+                            cd ${TARGET_DIR}
+
                             tar -xzf project.tar.gz
                             rm -f project.tar.gz
-                            
-                            echo 'Orchestrating active multi-container runtimes...'
-                            
-                            # Standard declarative production lifecycle upgrade pattern
-                            # Add multiple custom -f definition flags here if using segmented compose layers
-                            docker compose down
-                            docker compose up --build -d
-                            
-                            echo '--- Active System Verification Process ---'
+
+                            docker compose up -d --build
+
                             docker ps
                         "
-                        
-                        # 6. Local Workspace clean up routines
-                        rm -f askpass.sh project.tar.gz
-                    """
+                    '''
                 }
             }
         }
     }
+
+    post {
+        success {
+            echo 'Deployment completed successfully.'
+        }
+
+        failure {
+            echo 'Deployment failed.'
+        }
+
+        always {
+            sh 'rm -f project.tar.gz || true'
+        }
+    }
 }
-🎛 Step 4: Docker Compose Manifest Design
-To ensure your application services fit perfectly with this automated execution strategy, verify your docker-compose.yml follows these guidelines:
+```
 
-Explicit Namespaces: Avoid hardcoding generic global runtime names (container_name) unless isolation is explicitly required. Relying on default context generation prevents service collision failures.
+---
 
-Declarative Parameter Bindings: Manage ports properly via mapping blocks (ports: - "host_port:container_port") unless you are using network_mode: host configurations.
+## Docker Compose Example
 
-Persistent Volumes: Store stateful server logs or databases using external naming volumes or path mounts so your data is preserved when containers are updated.
+Example `docker-compose.yml`:
 
-🔍 Step 5: Essential Troubleshooting Strategies
-1. Connection Refused Errors (ERR_CONNECTION_REFUSED)
-If containers report an active Up status but connection endpoints fail:
+```yaml
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+```
 
-Check for application changes that may have altered standard runtime binding ports.
+Start services manually:
 
-Verify your host networking profile (e.g., configurations like network_mode: host completely bypass standard Docker bridge ports and bind directly to machine system interfaces).
+```bash
+docker compose up -d
+```
 
-Ensure target ports are opened within your server's security group rule sets or native packet-filtering layers (ufw or iptables).
+Stop services:
 
-2. Native Namespace Overlap Failures
-If the pipeline stage execution errors out with a name conflict:
+```bash
+docker compose down
+```
 
-The Root Cause: An unmanaged container is permanently reserving that specific resource key on your machine's Docker engine.
+View running containers:
 
-The Resolution: Manually remove the legacy entity by running docker rm -f <container_id_or_name> or append clear unique scope names directly inside your template source codes.
+```bash
+docker ps
+```
+
+---
+
+## Deployment Workflow
+
+1. Developer pushes code to GitHub.
+2. Jenkins pulls the latest source code.
+3. Jenkins packages the application.
+4. Jenkins transfers files to the target server.
+5. Docker Compose rebuilds and starts containers.
+6. Application becomes available on the configured port.
+
+---
+
+## Troubleshooting
+
+### SSH Connection Failed
+
+Verify:
+
+```bash
+ssh user@server-ip
+```
+
+Check:
+
+* Server IP address
+* SSH service status
+* Firewall rules
+* Jenkins credentials
+
+---
+
+### Docker Permission Denied
+
+Verify the deployment user belongs to the Docker group:
+
+```bash
+groups
+```
+
+If Docker is missing:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Then log in again.
+
+---
+
+### Container Starts but Application Is Not Reachable
+
+Check container status:
+
+```bash
+docker ps
+```
+
+Check logs:
+
+```bash
+docker logs <container_id>
+```
+
+Verify:
+
+* Port mappings
+* Firewall rules
+* Application listening address
+* Docker Compose configuration
+
+---
+
+### Deployment Fails During Build
+
+Inspect Jenkins console output:
+
+```text
+Jenkins Dashboard
+└── Build History
+    └── Console Output
+```
+
+Look for:
+
+* Git authentication errors
+* SSH authentication failures
+* Docker build errors
+* Missing environment variables
+
+---
+
+## Security Recommendations
+
+* Use SSH keys instead of passwords.
+* Avoid hardcoding secrets in source code.
+* Store credentials in Jenkins Credentials Manager.
+* Limit SSH access to trusted users.
+* Regularly update Docker and Jenkins.
+
+---
+
+## Useful Commands
+
+```bash
+docker ps
+docker compose up -d
+docker compose down
+docker compose logs
+docker compose restart
+```
+
+---
+
+## License
+
+This project is provided for educational and DevOps learning purposes.
